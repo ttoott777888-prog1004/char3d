@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Auto GLB Animation Blending (No File Picker)</title>
+  <title>char3d (Auto-load 777jh.glb)</title>
   <style>
     html,body{margin:0;height:100%;overflow:hidden;background:#0b1020}
     canvas{display:block}
@@ -12,10 +12,10 @@
       background:rgba(0,0,0,.55);color:#e7efff;
       font:13px/1.45 system-ui,-apple-system,Segoe UI,Roboto,"Noto Sans KR",sans-serif;
       padding:10px 12px;border-radius:12px;backdrop-filter: blur(6px);
-      min-width: 260px;
+      min-width: 280px;max-width: 520px;
     }
-    #title{font-weight:700;color:#fff;margin-bottom:6px}
-    #status{opacity:.9;margin-bottom:10px}
+    #title{font-weight:800;color:#fff;margin-bottom:6px}
+    #status{opacity:.9;margin-bottom:10px;white-space:pre-wrap}
     .row{display:flex;flex-wrap:wrap;gap:8px}
     button{
       border:0;border-radius:10px;padding:8px 10px;cursor:pointer;
@@ -24,6 +24,7 @@
     button:hover{filter:brightness(1.08)}
     button:active{transform:translateY(1px)}
     .muted{opacity:.8}
+    input[type="range"]{width:160px;vertical-align:middle}
   </style>
 
   <script type="importmap">
@@ -37,13 +38,13 @@
 </head>
 <body>
   <div id="ui">
-    <div id="title">Auto GLB + Animation Blending</div>
-    <div id="status">로딩 중…</div>
+    <div id="title">char3d (Auto)</div>
+    <div id="status">로딩 준비…</div>
     <div class="row" id="buttons"></div>
     <div style="margin-top:10px" class="muted">
-      키: 1/2/3 = 앞 3개 클립 전환<br/>
-      크로스페이드: <span id="fadeLabel">0.25</span>s
-      <input id="fade" type="range" min="0.01" max="1.5" step="0.01" value="0.25" style="width:140px;vertical-align:middle"/>
+      키: 1~9 = 클립 전환<br/>
+      페이드: <span id="fadeLabel">0.25</span>s
+      <input id="fade" type="range" min="0.01" max="1.50" step="0.01" value="0.25" />
     </div>
   </div>
 
@@ -52,21 +53,23 @@
     import { OrbitControls } from "three/addons/controls/OrbitControls.js";
     import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
-    // =========================
-    // 0) CONFIG
-    // =========================
-    const MODEL_URL = "./777jh.glb"; // 같은 저장소 루트에 올린 파일
+    // 같은 폴더( /char3d/ )에 있는 777jh.glb를 자동 로드
+    const MODEL_URL = new URL("777jh.glb", window.location.href).toString();
 
-    // =========================
-    // 1) BASIC SCENE
-    // =========================
+    const statusEl = document.getElementById("status");
+    const btnWrap  = document.getElementById("buttons");
+    const fade     = document.getElementById("fade");
+    const fadeLabel= document.getElementById("fadeLabel");
+    fade.addEventListener("input", () => fadeLabel.textContent = Number(fade.value).toFixed(2));
+
+    // ========= Scene =========
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0b1020);
 
-    const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.01, 500);
+    const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.01, 500);
     camera.position.set(2.2, 1.6, 3.2);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+    const renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:"high-performance" });
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     renderer.setSize(innerWidth, innerHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -76,7 +79,6 @@
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
-    controls.target.set(0, 1.0, 0);
 
     scene.add(new THREE.HemisphereLight(0xaabfff, 0x223355, 0.8));
     const dir = new THREE.DirectionalLight(0xffffff, 1.2);
@@ -88,25 +90,13 @@
       new THREE.MeshStandardMaterial({ color: 0x0e162c, roughness: 1.0, metalness: 0.0 })
     );
     ground.rotation.x = -Math.PI / 2;
-    ground.position.y = 0;
     scene.add(ground);
 
     const grid = new THREE.GridHelper(30, 30, 0x334466, 0x1b2a44);
     grid.position.y = 0.001;
     scene.add(grid);
 
-    // =========================
-    // 2) UI
-    // =========================
-    const statusEl = document.getElementById("status");
-    const btnWrap = document.getElementById("buttons");
-    const fadeSlider = document.getElementById("fade");
-    const fadeLabel = document.getElementById("fadeLabel");
-    fadeSlider.addEventListener("input", () => fadeLabel.textContent = Number(fadeSlider.value).toFixed(2));
-
-    // =========================
-    // 3) ANIMATION SYSTEM
-    // =========================
+    // ========= Animation =========
     const clock = new THREE.Clock();
     let mixer = null;
     let modelRoot = null;
@@ -114,34 +104,59 @@
     const actions = new Map(); // name -> AnimationAction
     let activeAction = null;
 
-    function setWeight(action, w) {
+    function pickDefault(names){
+      const low = names.map(n => (n||"").toLowerCase());
+      let i = low.findIndex(n => n.includes("idle"));
+      if (i >= 0) return names[i];
+      i = low.findIndex(n => n.includes("walk"));
+      if (i >= 0) return names[i];
+      i = low.findIndex(n => n.includes("run"));
+      if (i >= 0) return names[i];
+      return names[0];
+    }
+
+    function setWeight(action, w){
       action.enabled = true;
       action.setEffectiveTimeScale(1);
       action.setEffectiveWeight(w);
       if (!action.isRunning()) action.play();
     }
 
-    function fadeTo(name, duration) {
+    function fadeTo(name, duration){
       const next = actions.get(name);
       if (!next) return;
       if (activeAction === next) return;
 
-      next.reset().play();
+      // 다음 액션 준비
+      next.reset();
       setWeight(next, 1);
+      next.play();
 
+      // 크로스페이드
       if (activeAction) {
         activeAction.crossFadeTo(next, Math.max(0.001, duration), false);
       }
+
       activeAction = next;
-      statusEl.textContent = `재생: ${name}`;
+      statusEl.textContent = `로드됨\nMODEL: ${MODEL_URL}\n클립: ${actions.size}개\n재생: ${name}`;
     }
 
-    function frameObject(obj) {
+    function buildButtons(names){
+      btnWrap.innerHTML = "";
+      names.forEach((name, idx) => {
+        const b = document.createElement("button");
+        b.textContent = `${idx+1}. ${name}`;
+        b.addEventListener("click", () => fadeTo(name, Number(fade.value)));
+        btnWrap.appendChild(b);
+      });
+    }
+
+    function frameObject(obj){
       const box = new THREE.Box3().setFromObject(obj);
       const size = box.getSize(new THREE.Vector3());
       const center = box.getCenter(new THREE.Vector3());
 
-      // 바닥 기준(최저점이 y=0)
+      // 바닥 기준: 최저점이 y=0
       obj.position.x += (obj.position.x - center.x);
       obj.position.y += (obj.position.y - box.min.y);
       obj.position.z += (obj.position.z - center.z);
@@ -157,32 +172,9 @@
       controls.update();
     }
 
-    function buildButtons(names) {
-      btnWrap.innerHTML = "";
-      names.forEach((name, idx) => {
-        const b = document.createElement("button");
-        b.textContent = name || `Clip_${idx+1}`;
-        b.addEventListener("click", () => fadeTo(name, Number(fadeSlider.value)));
-        btnWrap.appendChild(b);
-      });
-    }
-
-    function pickDefault(names) {
-      const lower = names.map(n => (n || "").toLowerCase());
-      const idleIdx = lower.findIndex(n => n.includes("idle"));
-      if (idleIdx >= 0) return names[idleIdx];
-
-      const walkIdx = lower.findIndex(n => n.includes("walk"));
-      if (walkIdx >= 0) return names[walkIdx];
-
-      return names[0];
-    }
-
-    // =========================
-    // 4) LOAD GLB (NO FILE PICKER)
-    // =========================
+    // ========= Load =========
+    statusEl.textContent = `GLB 자동 로드 중…\n${MODEL_URL}`;
     const loader = new GLTFLoader();
-    statusEl.textContent = "GLB 자동 로드 중…";
 
     loader.load(
       MODEL_URL,
@@ -190,23 +182,22 @@
         modelRoot = gltf.scene;
         scene.add(modelRoot);
 
-        modelRoot.traverse((o) => {
-          if (o.isSkinnedMesh) o.frustumCulled = false;
-        });
+        // 스킨드메쉬 컬링 방지(가끔 깜빡임 방지)
+        modelRoot.traverse(o => { if (o.isSkinnedMesh) o.frustumCulled = false; });
 
         frameObject(modelRoot);
 
         mixer = new THREE.AnimationMixer(modelRoot);
 
-        if (!gltf.animations || gltf.animations.length === 0) {
-          statusEl.textContent = "애니메이션 클립이 없습니다. (GLB에 Actions 포함 필요)";
+        const anims = gltf.animations || [];
+        if (!anims.length) {
+          statusEl.textContent = `애니메이션 클립이 없습니다.\n(GLB 내 Actions 포함 필요)\nMODEL: ${MODEL_URL}`;
           return;
         }
 
-        // action 만들기
         actions.clear();
-        for (const clip of gltf.animations) {
-          const name = clip.name && clip.name.trim() ? clip.name.trim() : `Clip_${actions.size+1}`;
+        for (const clip of anims) {
+          const name = (clip.name && clip.name.trim()) ? clip.name.trim() : `Clip_${actions.size+1}`;
           const a = mixer.clipAction(clip);
           a.loop = THREE.LoopRepeat;
           a.clampWhenFinished = false;
@@ -216,46 +207,47 @@
         const names = [...actions.keys()];
         buildButtons(names);
 
-        // 기본 클립 1개만 weight=1로 시작
         const def = pickDefault(names);
+
+        // 전부 재생 상태로 두되, 기본만 weight=1
         for (const [n, a] of actions.entries()) setWeight(a, n === def ? 1 : 0);
         activeAction = actions.get(def);
-        statusEl.textContent = `로드 완료: ${def}`;
+
+        statusEl.textContent = `로드 완료\nMODEL: ${MODEL_URL}\n클립: ${actions.size}개\n재생: ${def}`;
       },
       undefined,
       (err) => {
-        statusEl.textContent = "로드 실패 (경로/파일명 확인): " + (err?.message || err);
+        statusEl.textContent =
+          `로드 실패\nMODEL: ${MODEL_URL}\n` +
+          `에러: ${(err && err.message) ? err.message : err}`;
       }
     );
 
-    // =========================
-    // 5) KEYS 1/2/3
-    // =========================
+    // 키 1~9로 전환
     window.addEventListener("keydown", (e) => {
       if (!actions.size) return;
+      const n = Number(e.key);
+      if (!Number.isFinite(n) || n < 1 || n > 9) return;
       const names = [...actions.keys()];
-      if (e.key === "1" && names[0]) fadeTo(names[0], Number(fadeSlider.value));
-      if (e.key === "2" && names[1]) fadeTo(names[1], Number(fadeSlider.value));
-      if (e.key === "3" && names[2]) fadeTo(names[2], Number(fadeSlider.value));
+      const name = names[n-1];
+      if (name) fadeTo(name, Number(fade.value));
     });
 
-    // =========================
-    // 6) LOOP
-    // =========================
+    // ========= Loop =========
     addEventListener("resize", () => {
-      camera.aspect = innerWidth / innerHeight;
+      camera.aspect = innerWidth/innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(innerWidth, innerHeight);
     });
 
-    function animate() {
-      requestAnimationFrame(animate);
+    function tick(){
+      requestAnimationFrame(tick);
       const dt = clock.getDelta();
       controls.update();
       if (mixer) mixer.update(dt);
       renderer.render(scene, camera);
     }
-    animate();
+    tick();
   </script>
 </body>
 </html>
