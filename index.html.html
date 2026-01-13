@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>GLB Animation Skinning + Blending</title>
+  <style>
+    html,body{margin:0;height:100%;overflow:hidden;background:#0b1020}
+    canvas{display:block}
+    #hud{
+      position:absolute;left:10px;top:10px;z-index:10;
+      color:#d7e3ff;font:13px/1.4 system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", sans-serif;
+      background:rgba(0,0,0,.55);padding:10px 12px;border-radius:10px;
+      backdrop-filter: blur(6px);
+      max-width: 520px;
+    }
+    #hud b{color:#fff}
+    #file{
+      display:inline-block;
+      margin-top:8px;
+    }
+    #msg{opacity:.9}
+  </style>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="hud">
+    <div><b>GLB</b> 선택 → 애니메이션 목록 자동 생성 → 블렌딩/크로스페이드</div>
+    <input id="file" type="file" accept=".glb,.gltf" />
+    <div id="msg" style="margin-top:6px;">키: 1/2/3 = 첫 3개 클립 전환</div>
+  </div>
+
+  <script type="module">
+    import * as THREE from "three";
+    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+    import GUI from "https://cdn.jsdelivr.net/npm/lil-gui@0.19/+esm";
+
+    // =========================
+    // 0) BASIC SCENE
+    // =========================
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0b1020);
+
+    const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.01, 500);
+    camera.position.set(2.2, 1.6, 3.2);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.0;
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.target.set(0, 1.0, 0);
+
+    // Lights
+    scene.add(new THREE.HemisphereLight(0xaabfff, 0x223355, 0.8));
+    const dir = new THREE.DirectionalLight(0xffffff, 1.2);
+    dir.position.set(3, 8, 4);
+    dir.castShadow = false;
+    scene.add(dir);
+
+    // Ground + grid
+    const ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(200, 200),
+      new THREE.MeshStandardMaterial({ color: 0x0e162c, roughness: 1.0, metalness: 0.0 })
+    );
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = 0;
+    scene.add(ground);
+
+    const grid = new THREE.GridHelper(30, 30, 0x334466, 0x1b2a44);
+    grid.position.y = 0.001;
+    scene.add(grid);
+
+    // =========================
+    // 1) ANIMATION SYSTEM
+    // =========================
+    const clock = new THREE.Clock();
+    let mixer = null;
+    let modelRoot = null;
+
+    const actions = new Map();     // name -> AnimationAction
+    const clips = [];             // AnimationClip[]
+    let activeAction = null;
+    let previousAction = null;
+
+    // GUI
+    let gui = null;
+    const settings = {
+      timeScale: 1.0,
+      crossFade: 0.25,
+      action: "",
+      mode: "Crossfade" // "Crossfade" | "Blend"
+    };
+    const weightControls = {}; // name -> weight
+
+    function disposeGUI() {
+      if (gui) {
+        gui.destroy();
+        gui = null;
+      }
+    }
+
+    function setWeight(action, weight) {
+      action.enabled = true;
+      action.setEffectiveTimeScale(1);
+      action.setEffectiveWeight(weight);
+      if (!action.isRunning()) action.play();
+    }
+
+    function fadeToAction(name, duration) {
+      const next = actions.get(name);
+      if (!next) return;
+
+      previousAction = activeAction;
+      activeAction = next;
+
+      if (previousAction === activeAction) return;
+
+      // ensure both running
+      setWeight(activeAction, 1.0);
+      activeAction.reset().play();
+
+      if (previousAction) {
+        previousAction.crossFadeTo(activeAction, Math.max(0.001, duration), false);
+      }
+      settings.action = name;
+    }
+
+    function normalizeWeights() {
+      let sum = 0;
+      for (const n of actions.keys()) sum += (weightControls[n] ?? 0);
+      if (sum <= 0) return;
+      for (const n of actions.keys()) weightControls[n] = (weightControls[n] ?? 0) / sum;
+    }
+
+    function applyBlendWeights() {
+      normalizeWeights();
+      for (const [name, action] of actions.entries()) {
+        const w = Math.max(0, Math.min(1, weightControls[name] ?? 0));
+        setWeight(action, w);
+      }
+    }
+
+    function buildGUI() {
+      disposeGUI();
+      gui = new GUI({ title: "Animation Blending" });
+
+      const clipNames = [...actions.keys()];
+      settings.action = clipNames[0] || "";
+      settings.mode = "Crossfade";
+
+      const f0 = gui.addFolder("Global");
+      f0.add(settings, "timeScale", 0, 2, 0.01).name("Time Scale");
+      f0.add(settings, "crossFade", 0.01, 1.5, 0.01).name("CrossFade (s)");
+      f0.add(settings, "mode", ["Crossfade", "Blend"]).name("Mode").onChange(() => {
+        if (settings.mode === "Blend") {
+          // start all actions for blending
+          for (const [n, a] of actions.entries()) setWeight(a, weightControls[n] ?? 0);
+          applyBlendWeights();
+        } else {
+          // return to single active action
+          for (const [n, a] of actions.entries()) setWeight(a, n === settings.action ? 1 : 0);
+          activeAction = actions.get(settings.action) || null;
+        }
+      });
+
+      const f1 = gui.addFolder("Actions");
+      f1.add(settings, "action", clipNames).name("Play").onChange((v) => {
+        if (settings.mode === "Blend") {
+          // in blend mode: set selected to 1, others to 0 (quick pick)
+          for (const n of actions.keys()) weightControls[n] = (n === v) ? 1 : 0;
+          applyBlendWeights();
+        } else {
+          fadeToAction(v, settings.crossFade);
+        }
+      });
+
+      const f2 = gui.addFolder("Blend Weights");
+      for (const n of clipNames) {
+        weightControls[n] = (n === settings.action) ? 1 : 0;
+        f2.add(weightControls, n, 0, 1, 0.001).name(n).onChange(() => {
+          settings.mode = "Blend";
+          applyBlendWeights();
+        });
+      }
+
+      f0.open();
+      f1.open();
+    }
+
+    // =========================
+    // 2) MODEL LOADING
+    // =========================
+    const loader = new GLTFLoader();
+    const fileInput = document.getElementById("file");
+    const msg = document.getElementById("msg");
+
+    fileInput.addEventListener("change", () => {
+      const f = fileInput.files && fileInput.files[0];
+      if (!f) return;
+
+      const url = URL.createObjectURL(f);
+      loadGLB(url, f.name).finally(() => URL.revokeObjectURL(url));
+    });
+
+    async function loadGLB(url, label = "") {
+      // cleanup previous
+      if (modelRoot) {
+        scene.remove(modelRoot);
+        modelRoot.traverse((o) => {
+          if (o.isMesh) {
+            if (o.geometry) o.geometry.dispose();
+            if (o.material) {
+              const mats = Array.isArray(o.material) ? o.material : [o.material];
+              for (const m of mats) {
+                for (const k in m) {
+                  const v = m[k];
+                  if (v && v.isTexture) v.dispose();
+                }
+                m.dispose?.();
+              }
+            }
+          }
+        });
+        modelRoot = null;
+      }
+
+      if (mixer) mixer.stopAllAction();
+      mixer = null;
+      actions.clear();
+      clips.length = 0;
+      disposeGUI();
+
+      msg.textContent = "로딩 중... " + (label ? `(${label})` : "");
+
+      return new Promise((resolve, reject) => {
+        loader.load(
+          url,
+          (gltf) => {
+            modelRoot = gltf.scene;
+            scene.add(modelRoot);
+
+            // prevent skin culling glitches
+            modelRoot.traverse((o) => {
+              if (o.isSkinnedMesh) o.frustumCulled = false;
+            });
+
+            // center + frame
+            frameObject(modelRoot);
+
+            // animations
+            mixer = new THREE.AnimationMixer(modelRoot);
+            if (Array.isArray(gltf.animations)) {
+              for (const c of gltf.animations) clips.push(c);
+            }
+
+            if (clips.length === 0) {
+              msg.textContent = "애니메이션 클립이 없습니다. (GLB에 Actions 포함 확인)";
+              resolve();
+              return;
+            }
+
+            // create actions
+            for (const clip of clips) {
+              const a = mixer.clipAction(clip);
+              a.enabled = true;
+              a.clampWhenFinished = false;
+              a.loop = THREE.LoopRepeat;
+              actions.set(clip.name || `Clip_${actions.size}`, a);
+            }
+
+            // pick first as active
+            const firstName = [...actions.keys()][0];
+            activeAction = actions.get(firstName);
+
+            // start all actions with weights for blending system (default: only first weight=1)
+            for (const [name, a] of actions.entries()) {
+              setWeight(a, name === firstName ? 1 : 0);
+              weightControls[name] = (name === firstName ? 1 : 0);
+            }
+
+            settings.action = firstName;
+
+            buildGUI();
+            msg.textContent = `로드됨: ${label || "GLB"} / 클립: ${actions.size}개`;
+
+            resolve();
+          },
+          undefined,
+          (err) => {
+            msg.textContent = "로드 실패: " + (err?.message || err);
+            reject(err);
+          }
+        );
+      });
+    }
+
+    function frameObject(obj) {
+      const box = new THREE.Box3().setFromObject(obj);
+      const size = box.getSize(new THREE.Vector3());
+      const center = box.getCenter(new THREE.Vector3());
+
+      // move model to origin-ish
+      obj.position.x += (obj.position.x - center.x);
+      obj.position.y += (obj.position.y - box.min.y);
+      obj.position.z += (obj.position.z - center.z);
+
+      // camera distance
+      const maxSize = Math.max(size.x, size.y, size.z);
+      const fitHeightDistance = maxSize / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)));
+      const fitWidthDistance = fitHeightDistance / camera.aspect;
+      const distance = 1.2 * Math.max(fitHeightDistance, fitWidthDistance);
+
+      const dir = new THREE.Vector3(1, 0.35, 1).normalize();
+      camera.position.copy(center).addScaledVector(dir, distance);
+      controls.target.set(0, Math.max(0.9, size.y * 0.55), 0);
+      controls.update();
+    }
+
+    // =========================
+    // 3) INPUT (1/2/3)
+    // =========================
+    window.addEventListener("keydown", (e) => {
+      if (!actions.size) return;
+      const names = [...actions.keys()];
+      if (e.key === "1" && names[0]) {
+        if (settings.mode === "Blend") { settings.action = names[0]; for (const n of names) weightControls[n] = (n===names[0])?1:0; applyBlendWeights(); }
+        else fadeToAction(names[0], settings.crossFade);
+      }
+      if (e.key === "2" && names[1]) {
+        if (settings.mode === "Blend") { settings.action = names[1]; for (const n of names) weightControls[n] = (n===names[1])?1:0; applyBlendWeights(); }
+        else fadeToAction(names[1], settings.crossFade);
+      }
+      if (e.key === "3" && names[2]) {
+        if (settings.mode === "Blend") { settings.action = names[2]; for (const n of names) weightControls[n] = (n===names[2])?1:0; applyBlendWeights(); }
+        else fadeToAction(names[2], settings.crossFade);
+      }
+    });
+
+    // =========================
+    // 4) RESIZE + LOOP
+    // =========================
+    addEventListener("resize", () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const dt = clock.getDelta();
+      controls.update();
+      if (mixer) mixer.update(dt * settings.timeScale);
+      renderer.render(scene, camera);
+    }
+    animate();
+  </script>
+</body>
+</html>
