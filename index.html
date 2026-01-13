@@ -1,78 +1,137 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>char3d (Auto-load Walk.glb)</title>
-  <style>
-    html,body{margin:0;height:100%;overflow:hidden;background:#0b1020}
-    canvas{display:block}
-    #ui{
-      position:absolute;left:12px;top:12px;z-index:10;
-      background:rgba(0,0,0,.55);color:#e7efff;
-      font:13px/1.45 system-ui,-apple-system,Segoe UI,Roboto,"Noto Sans KR",sans-serif;
-      padding:10px 12px;border-radius:12px;backdrop-filter: blur(6px);
-      min-width: 280px;max-width: 520px;
-    }
-    #title{font-weight:800;color:#fff;margin-bottom:6px}
-    #status{opacity:.9;margin-bottom:10px;white-space:pre-wrap}
-    .row{display:flex;flex-wrap:wrap;gap:8px}
-    button{
-      border:0;border-radius:10px;padding:8px 10px;cursor:pointer;
-      background:#223b78;color:#fff;
-    }
-    button:hover{filter:brightness(1.08)}
-    button:active{transform:translateY(1px)}
-    .muted{opacity:.8}
-    input[type="range"]{width:160px;vertical-align:middle}
-  </style>
-
-  <script type="importmap">
-    {
-      "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
-      }
-    }
-  </script>
+    <meta charset="UTF-8">
+    <title>AI Theme Park World v2.0</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #f0f4f8; font-family: sans-serif; }
+        canvas { display: block; }
+        #status {
+            position: absolute; top: 20px; left: 0; width: 100%;
+            text-align: center; color: #333; 
+            font-weight: bold; font-size: 1.2rem;
+            pointer-events: none; 
+            text-shadow: 1px 1px 0px rgba(255,255,255,0.7);
+        }
+    </style>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
 </head>
 <body>
-  <div id="ui">
-    <div id="title">char3d (Auto)</div>
-    <div id="status">로딩 준비…</div>
-    <div class="row" id="buttons"></div>
-    <div style="margin-top:10px" class="muted">
-      키: 1~9 = 클립 전환<br/>
-      페이드: <span id="fadeLabel">0.25</span>s
-      <input id="fade" type="range" min="0.01" max="1.50" step="0.01" value="0.25" />
-    </div>
-  </div>
 
-  <script type="module">
-    import * as THREE from "three";
-    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-    import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+<div id="status">풍성한 놀이공원 생성 중...</div>
 
-    // 같은 폴더( /char3d/ )에 있는 777jh.glb를 자동 로드
-    const MODEL_URL = new URL("Walk.glb", window.location.href).toString();
+<script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-    const statusEl = document.getElementById("status");
-    const btnWrap  = document.getElementById("buttons");
-    const fade     = document.getElementById("fade");
-    const fadeLabel= document.getElementById("fadeLabel");
-    fade.addEventListener("input", () => fadeLabel.textContent = Number(fade.value).toFixed(2));
-
-    // ========= Scene =========
+    // 1. Scene & Environment
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0b1020);
+    scene.background = new THREE.Color(0x87ceeb); // 밝은 하늘색
 
-    const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.01, 500);
-    camera.position.set(2.2, 1.6, 3.2);
+    // 2. Lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.4);
+    scene.add(ambientLight);
 
-    const renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:"high-performance" });
-    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-    renderer.setSize(innerWidth, innerHeight);
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    const dirLight = new THREE.DirectionalLight(0xffffff, 2.5);
+    dirLight.position.set(50, 80, 50);
+    dirLight.castShadow = true;
+    dirLight.shadow.mapSize.width = 4096; // 고해상도 그림자
+    dirLight.shadow.mapSize.height = 4096;
+    dirLight.shadow.camera.left = -150;
+    dirLight.shadow.camera.right = 150;
+    dirLight.shadow.camera.top = 150;
+    dirLight.shadow.camera.bottom = -150;
+    scene.add(dirLight);
+
+    // 3. World Objects
+    const collidableObjects = []; 
+    const ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(500, 500),
+        new THREE.MeshStandardMaterial({ color: 0x7cfc00, roughness: 0.9 }) // 잔디색
+    );
+    ground.rotation.x = -Math.PI / 2;
+    ground.receiveShadow = true;
+    scene.add(ground);
+    collidableObjects.push(ground);
+
+    const grid = new THREE.GridHelper(400, 80, 0x55aa55, 0x66bb66);
+    scene.add(grid);
+
+    function addBox(w, h, d, x, y, z, color = 0xffffff) {
+        const mesh = new THREE.Mesh(
+            new THREE.BoxGeometry(w, h, d),
+            new THREE.MeshStandardMaterial({ color: color })
+        );
+        mesh.position.set(x, y + h / 2, z);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        scene.add(mesh);
+        collidableObjects.push(mesh);
+        return mesh;
+    }
+
+    // --- 확장된 테마파크 건축 ---
+
+    const FENCE_LIMIT = 50; 
+    // [울타리 및 게이트]
+    addBox(100, 3, 1, 0, 0, FENCE_LIMIT, 0x8b4513); // 앞
+    addBox(100, 3, 1, 0, 0, -FENCE_LIMIT, 0x8b4513); // 뒤
+    addBox(1, 3, 100, FENCE_LIMIT, 0, 0, 0x8b4513); // 우
+    addBox(1, 3, 100, -FENCE_LIMIT, 0, 0, 0x8b4513); // 좌
+
+    // 입구 아치 게이트
+    addBox(2, 8, 2, -6, 0, 48, 0xffd700);
+    addBox(2, 8, 2, 6, 0, 48, 0xffd700);
+    addBox(14, 2, 2, 0, 8, 48, 0xffd700);
+
+    // [다층 구조물]
+    // 2층 플랫폼
+    addBox(25, 0.5, 25, -15, 3.5, -25, 0xff69b4);
+    for(let i = 0; i < 12; i++) {
+        addBox(6, 0.3, 1.5, -15, 0.3 * i, -10 - (i * 1.0), 0xffff00);
+    }
+    // 3층 플랫폼
+    addBox(20, 0.5, 20, 20, 7.0, -25, 0x00bfff);
+    for(let i = 0; i < 12; i++) {
+        addBox(1.5, 0.3, 6, 2.5 + (i * 1.2), 3.5 + (0.3 * i), -25, 0x32cd32);
+    }
+
+    // [공원 시설물들]
+    // 가로등/기둥
+    for(let i=0; i<10; i++) {
+        addBox(0.4, 6, 0.4, (i*8)-35, 0, 35, 0x333333);
+    }
+    // 벤치 구역
+    for(let i=0; i<4; i++) {
+        addBox(4, 0.6, 2, -35, 0, (i*10)-15, 0x8b4513); // 벤치
+    }
+    // 매점/건물
+    addBox(8, 5, 8, 35, 0, 10, 0xff4500); // 빨간 상점
+    addBox(6, 4, 6, 35, 0, 25, 0x1e90ff); // 파란 상점
+    
+    // 조경 나무
+    for(let i=0; i<5; i++){
+        addBox(2, 1, 2, -20, 0, 15+(i*5), 0x556b2f);
+        addBox(1, 4, 1, -20, 1, 15+(i*5), 0x228b22);
+    }
+
+    // 4. Camera & Renderer
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 2000);
+    camera.position.set(70, 50, 80);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
     document.body.appendChild(renderer.domElement);
@@ -80,175 +139,143 @@
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
 
-    scene.add(new THREE.HemisphereLight(0xaabfff, 0x223355, 0.8));
-    const dir = new THREE.DirectionalLight(0xffffff, 1.2);
-    dir.position.set(3, 8, 4);
-    scene.add(dir);
-
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(200, 200),
-      new THREE.MeshStandardMaterial({ color: 0x0e162c, roughness: 1.0, metalness: 0.0 })
-    );
-    ground.rotation.x = -Math.PI / 2;
-    scene.add(ground);
-
-    const grid = new THREE.GridHelper(30, 30, 0x334466, 0x1b2a44);
-    grid.position.y = 0.001;
-    scene.add(grid);
-
-    // ========= Animation =========
+    // 5. Variables & AI State
+    let mixer, model, walkAction;
     const clock = new THREE.Clock();
-    let mixer = null;
-    let modelRoot = null;
+    const statusEl = document.getElementById('status');
 
-    const actions = new Map(); // name -> AnimationAction
-    let activeAction = null;
+    const downRay = new THREE.Raycaster();
+    const frontRay = new THREE.Raycaster();
 
-    function pickDefault(names){
-      const low = names.map(n => (n||"").toLowerCase());
-      let i = low.findIndex(n => n.includes("idle"));
-      if (i >= 0) return names[i];
-      i = low.findIndex(n => n.includes("walk"));
-      if (i >= 0) return names[i];
-      i = low.findIndex(n => n.includes("run"));
-      if (i >= 0) return names[i];
-      return names[0];
-    }
+    const ai = {
+        state: 'idle',
+        target: new THREE.Vector3(),
+        timer: 0,
+        currentSpeed: 0,
+        currentAnimScale: 1,
+        rotSpeed: 5.0 
+    };
 
-    function setWeight(action, w){
-      action.enabled = true;
-      action.setEffectiveTimeScale(1);
-      action.setEffectiveWeight(w);
-      if (!action.isRunning()) action.play();
-    }
-
-    function fadeTo(name, duration){
-      const next = actions.get(name);
-      if (!next) return;
-      if (activeAction === next) return;
-
-      // 다음 액션 준비
-      next.reset();
-      setWeight(next, 1);
-      next.play();
-
-      // 크로스페이드
-      if (activeAction) {
-        activeAction.crossFadeTo(next, Math.max(0.001, duration), false);
-      }
-
-      activeAction = next;
-      statusEl.textContent = `로드됨\nMODEL: ${MODEL_URL}\n클립: ${actions.size}개\n재생: ${name}`;
-    }
-
-    function buildButtons(names){
-      btnWrap.innerHTML = "";
-      names.forEach((name, idx) => {
-        const b = document.createElement("button");
-        b.textContent = `${idx+1}. ${name}`;
-        b.addEventListener("click", () => fadeTo(name, Number(fade.value)));
-        btnWrap.appendChild(b);
-      });
-    }
-
-    function frameObject(obj){
-      const box = new THREE.Box3().setFromObject(obj);
-      const size = box.getSize(new THREE.Vector3());
-      const center = box.getCenter(new THREE.Vector3());
-
-      // 바닥 기준: 최저점이 y=0
-      obj.position.x += (obj.position.x - center.x);
-      obj.position.y += (obj.position.y - box.min.y);
-      obj.position.z += (obj.position.z - center.z);
-
-      const maxSize = Math.max(size.x, size.y, size.z);
-      const fitH = maxSize / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)));
-      const fitW = fitH / camera.aspect;
-      const dist = 1.2 * Math.max(fitH, fitW);
-
-      const dir = new THREE.Vector3(1, 0.35, 1).normalize();
-      camera.position.copy(center).addScaledVector(dir, dist);
-      controls.target.set(0, Math.max(0.9, size.y * 0.55), 0);
-      controls.update();
-    }
-
-    // ========= Load =========
-    statusEl.textContent = `GLB 자동 로드 중…\n${MODEL_URL}`;
+    // 6. Loader
     const loader = new GLTFLoader();
-
-    loader.load(
-      MODEL_URL,
-      (gltf) => {
-        modelRoot = gltf.scene;
-        scene.add(modelRoot);
-
-        // 스킨드메쉬 컬링 방지(가끔 깜빡임 방지)
-        modelRoot.traverse(o => { if (o.isSkinnedMesh) o.frustumCulled = false; });
-
-        frameObject(modelRoot);
-
-        mixer = new THREE.AnimationMixer(modelRoot);
-
-        const anims = gltf.animations || [];
-        if (!anims.length) {
-          statusEl.textContent = `애니메이션 클립이 없습니다.\n(GLB 내 Actions 포함 필요)\nMODEL: ${MODEL_URL}`;
-          return;
-        }
-
-        actions.clear();
-        for (const clip of anims) {
-          const name = (clip.name && clip.name.trim()) ? clip.name.trim() : `Clip_${actions.size+1}`;
-          const a = mixer.clipAction(clip);
-          a.loop = THREE.LoopRepeat;
-          a.clampWhenFinished = false;
-          actions.set(name, a);
-        }
-
-        const names = [...actions.keys()];
-        buildButtons(names);
-
-        const def = pickDefault(names);
-
-        // 전부 재생 상태로 두되, 기본만 weight=1
-        for (const [n, a] of actions.entries()) setWeight(a, n === def ? 1 : 0);
-        activeAction = actions.get(def);
-
-        statusEl.textContent = `로드 완료\nMODEL: ${MODEL_URL}\n클립: ${actions.size}개\n재생: ${def}`;
-      },
-      undefined,
-      (err) => {
-        statusEl.textContent =
-          `로드 실패\nMODEL: ${MODEL_URL}\n` +
-          `에러: ${(err && err.message) ? err.message : err}`;
-      }
-    );
-
-    // 키 1~9로 전환
-    window.addEventListener("keydown", (e) => {
-      if (!actions.size) return;
-      const n = Number(e.key);
-      if (!Number.isFinite(n) || n < 1 || n > 9) return;
-      const names = [...actions.keys()];
-      const name = names[n-1];
-      if (name) fadeTo(name, Number(fade.value));
-    });
-
-    // ========= Loop =========
-    addEventListener("resize", () => {
-      camera.aspect = innerWidth/innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(innerWidth, innerHeight);
-    });
-
-    function tick(){
-      requestAnimationFrame(tick);
-      const dt = clock.getDelta();
-      controls.update();
-      if (mixer) mixer.update(dt);
-      renderer.render(scene, camera);
+    function loadModel(url) {
+        if (model) { scene.remove(model); mixer = null; walkAction = null; }
+        loader.load(url, function (gltf) {
+            model = gltf.scene;
+            scene.add(model);
+            model.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+            mixer = new THREE.AnimationMixer(model);
+            let clip = gltf.animations.find(c => c.name === "Walk_Forward") || gltf.animations[0];
+            if (clip) { 
+                walkAction = mixer.clipAction(clip); 
+                walkAction.play(); 
+                walkAction.weight = 0; 
+            }
+            statusEl.textContent = "확장된 테마파크 AI 탐험 중";
+            decideNextMove();
+        });
     }
-    tick();
-  </script>
+
+    loadModel('https://ttoott777888-prog1004.github.io/char3d/Walk.glb');
+
+    // 7. AI Logic
+    function decideNextMove(isEvading = false) {
+        const range = (FENCE_LIMIT - 6) * 2; 
+        ai.target.set((Math.random() - 0.5) * range, 0, (Math.random() - 0.5) * range);
+
+        const isFast = Math.random() > 0.7;
+        ai.mode = isFast ? 'fast_walk' : 'walk';
+        ai.currentSpeed = isFast ? 4.2 : 2.0;
+        ai.currentAnimScale = isFast ? 1.8 : 1.1;
+
+        if (isEvading) {
+            ai.state = 'moving';
+            ai.timer = 0;
+            if (walkAction) {
+                walkAction.reset().play().setEffectiveWeight(1);
+                walkAction.timeScale = ai.currentAnimScale;
+            }
+            statusEl.textContent = "AI: 장애물 회피! 새로운 길 탐색 중";
+        } else {
+            ai.state = 'idle';
+            ai.timer = 0.3 + Math.random() * 1.0;
+            if (walkAction) walkAction.setEffectiveWeight(0);
+            statusEl.textContent = ai.mode === 'fast_walk' ? "AI: 급하다! (목표 지점 이동)" : "AI: 산책하며 구경 중";
+        }
+    }
+
+    function updateAI(dt) {
+        if (!model) return;
+
+        // 7-1. Height Detection
+        const checkPos = model.position.clone();
+        downRay.set(checkPos.add(new THREE.Vector3(0, 20, 0)), new THREE.Vector3(0, -1, 0));
+        const downIntersects = downRay.intersectObjects(collidableObjects);
+        if (downIntersects.length > 0) {
+            const groundHeight = downIntersects[0].point.y;
+            model.position.y = THREE.MathUtils.lerp(model.position.y, groundHeight, 0.25);
+        }
+
+        // 7-2. Movement
+        if (ai.state === 'idle') {
+            ai.timer -= dt;
+            if (ai.timer <= 0) {
+                ai.state = 'moving';
+                if (walkAction) {
+                    walkAction.reset().play().setEffectiveWeight(1);
+                    walkAction.timeScale = ai.currentAnimScale; 
+                }
+            }
+        }
+        else if (ai.state === 'moving') {
+            // Collision Detection
+            const forwardDir = new THREE.Vector3(0, 0, 1).applyQuaternion(model.quaternion);
+            frontRay.set(model.position.clone().add(new THREE.Vector3(0, 1.0, 0)), forwardDir);
+            const frontIntersects = frontRay.intersectObjects(collidableObjects.slice(1));
+
+            if (frontIntersects.length > 0 && frontIntersects[0].distance < 2.5) {
+                model.rotation.y += (Math.random() > 0.5 ? 1 : -1) * (Math.PI / 1.5 + Math.random()); 
+                decideNextMove(true); 
+                return;
+            }
+
+            const direction = new THREE.Vector3().subVectors(ai.target, model.position);
+            direction.y = 0;
+            const dist = direction.length();
+
+            if (dist < 2.5) { decideNextMove(); return; }
+
+            direction.normalize();
+            const targetRot = Math.atan2(direction.x, direction.z);
+            const currentRot = model.rotation.y;
+            let diff = targetRot - currentRot;
+            while (diff > Math.PI) diff -= Math.PI * 2;
+            while (diff < -Math.PI) diff += Math.PI * 2;
+            
+            const rotSpeed = ai.mode === 'fast_walk' ? ai.rotSpeed * 2.0 : ai.rotSpeed;
+            model.rotation.y += diff * rotSpeed * dt;
+
+            model.translateZ(ai.currentSpeed * dt);
+        }
+    }
+
+    // 8. Main Loop
+    function animate() {
+        requestAnimationFrame(animate);
+        const dt = clock.getDelta();
+        if (mixer) mixer.update(dt);
+        updateAI(dt);
+        controls.update();
+        renderer.render(scene, camera);
+    }
+
+    animate();
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+</script>
 </body>
 </html>
-
