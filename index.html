@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>char3d (Auto-load 777jh.glb)</title>
+  <title>char3d (Auto-load Walk.glb)</title>
   <style>
     html,body{margin:0;height:100%;overflow:hidden;background:#0b1020}
     canvas{display:block}
@@ -54,7 +54,7 @@
     import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 
     // 같은 폴더( /char3d/ )에 있는 777jh.glb를 자동 로드
-    const MODEL_URL = new URL("777jh.glb", window.location.href).toString();
+    const MODEL_URL = new URL("Walk.glb", window.location.href).toString();
 
     const statusEl = document.getElementById("status");
     const btnWrap  = document.getElementById("buttons");
@@ -251,3 +251,4 @@
   </script>
 </body>
 </html>
+
